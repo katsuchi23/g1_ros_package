@@ -15,13 +15,16 @@ def generate_launch_description():
     pkg_share = FindPackageShare('fast_lio_localization').find('fast_lio_localization')
     pkg_dir = get_package_share_directory('fast_lio_localization')
     
-    # Default map path
-    default_map_path = os.path.join(
-        os.path.dirname(pkg_dir),
-        'fast_lio_localization',
-        'PCD',
-        'mapping.pcd'
-    )
+    # Default map path - try install directory first, then source directory
+    default_map_path = os.path.join(pkg_dir, 'PCD', 'scans.pcd')
+    
+    # Fallback to source directory if not found in install
+    if not os.path.exists(default_map_path):
+        # Try to find source directory
+        src_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(pkg_dir))), 
+                                'src', 'mapping', 'FAST_LIO_LOCALIZATION', 'PCD', 'scans.pcd')
+        if os.path.exists(src_path):
+            default_map_path = src_path
     
     # Default rosbag path
     default_bag_path = os.path.join(
@@ -141,6 +144,6 @@ def generate_launch_description():
         global_localization_node,
         transform_fusion_node,
         map_publisher_node,
-        rviz_node,
+        # rviz_node,
         bag_player,
     ])

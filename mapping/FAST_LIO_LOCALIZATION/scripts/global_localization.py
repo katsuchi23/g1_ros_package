@@ -2,8 +2,12 @@
 # coding=utf8
 
 import copy
+import os
 import threading
 import time
+
+# Fix for Wayland/X11 compatibility
+os.environ['DISPLAY'] = os.environ.get('DISPLAY', ':0')
 
 import open3d as o3d
 import rclpy

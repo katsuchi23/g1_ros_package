@@ -129,6 +129,7 @@ install(DIRECTORY
   launch
   config
   rviz_cfg
+  PCD
   DESTINATION share/${PROJECT_NAME}
 )
 

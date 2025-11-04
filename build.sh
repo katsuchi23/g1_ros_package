@@ -11,6 +11,9 @@ colcon build --packages-select fast_lio
 # fast_lio_localization
 colcon build --packages-select fast_lio_localization
 
+# pcd2pgm
+colcon build --packages-select pcd2pgm
+
 # g1_controller & navigation
 colcon build --symlink-install --packages-select g1_controller
 colcon build --symlink-install --packages-select g1_navigation
