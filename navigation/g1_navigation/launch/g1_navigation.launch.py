@@ -19,7 +19,7 @@ def generate_launch_description():
     # Declare and launch configuration
     declare_map_yaml_cmd = DeclareLaunchArgument(
         'map',
-        default_value=os.path.join(nav2_bringup_dir, 'maps', 'dqn_stage1.yaml'),
+        default_value=os.path.join(nav2_bringup_dir, 'maps', 'map.yaml'),
         description='Full path to map yaml file to load')
     
     declare_autostart_cmd = DeclareLaunchArgument(
