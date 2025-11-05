@@ -122,6 +122,7 @@ install(PROGRAMS
   scripts/transform_fusion.py
   scripts/publish_initial_pose.py
   scripts/find_best_position.py
+  scripts/compare_poses.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

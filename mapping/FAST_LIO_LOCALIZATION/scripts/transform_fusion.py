@@ -108,37 +108,34 @@ class TransformFusionNode(Node):
                 
                 # self.tf_broadcaster.sendTransform(t)
                 
-                # DISABLED: Publish localization odometry (uncomment to enable)
-                # if cur_odom is not None:
-                #     # 发布全局定位的odometry
-                #     localization = Odometry()
-                #     T_odom_to_base_link = pose_to_mat(cur_odom)
-                #     # 这里T_map_to_odom短时间内变化缓慢 暂时不考虑与T_odom_to_base_link时间同步
-                #     T_map_to_base_link = np.matmul(T_map_to_odom, T_odom_to_base_link)
+                # Publish localization odometry (ENABLED)
+                if cur_odom is not None:
+                    # 发布全局定位的odometry
+                    localization = Odometry()
+                    T_odom_to_base_link = pose_to_mat(cur_odom)
+                    # 这里T_map_to_odom短时间内变化缓慢 暂时不考虑与T_odom_to_base_link时间同步
+                    T_map_to_base_link = np.matmul(T_map_to_odom, T_odom_to_base_link)
                     
-                #     rot = R.from_matrix(T_map_to_base_link[:3, :3])
-                #     quat = rot.as_quat()  # [x, y, z, w]
+                    rot = R.from_matrix(T_map_to_base_link[:3, :3])
+                    quat = rot.as_quat()  # [x, y, z, w]
                     
-                #     localization.pose.pose = Pose(
-                #         position=Point(
-                #             x=T_map_to_base_link[0, 3],
-                #             y=T_map_to_base_link[1, 3],
-                #             z=T_map_to_base_link[2, 3]
-                #         ),
-                #         orientation=Quaternion(
-                #             x=quat[0], y=quat[1], z=quat[2], w=quat[3]
-                #         )
-                #     )
-                #     localization.twist = cur_odom.twist
+                    localization.pose.pose = Pose(
+                        position=Point(
+                            x=T_map_to_base_link[0, 3],
+                            y=T_map_to_base_link[1, 3],
+                            z=T_map_to_base_link[2, 3]
+                        ),
+                        orientation=Quaternion(
+                            x=quat[0], y=quat[1], z=quat[2], w=quat[3]
+                        )
+                    )
+                    localization.twist = cur_odom.twist
                     
-                #     localization.header.stamp = cur_odom.header.stamp
-                #     localization.header.frame_id = 'map'
-                #     localization.child_frame_id = 'body'
+                    localization.header.stamp = cur_odom.header.stamp
+                    localization.header.frame_id = 'map'
+                    localization.child_frame_id = 'body'
                     
-                #     self.pub_localization.publish(localization)
-                
-                # Just sleep to keep thread alive
-                pass
+                    self.pub_localization.publish(localization)
                 
                 rate.sleep()
                 

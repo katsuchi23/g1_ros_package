@@ -126,18 +126,37 @@ def global_localization(pose_estimation, node, pub_map_to_odom):
     
     node.get_logger().info('Global localization by scan-to-map matching......')
 
-    # TODO 这里注意线程安全
-    scan_tobe_mapped = copy.copy(cur_scan)
+    # Proper deep copy by copying the numpy array data
+    scan_tobe_mapped = o3d.geometry.PointCloud()
+    if cur_scan is not None and len(cur_scan.points) > 0:
+        scan_tobe_mapped.points = o3d.utility.Vector3dVector(np.array(cur_scan.points))
+    else:
+        node.get_logger().error('cur_scan is None or empty before copying!')
+        return False
 
     tic = time.time()
 
     global_map_in_FOV = crop_global_map_in_FOV(global_map, pose_estimation, cur_odom, node.pub_submap)
 
+    # Debug: Check point cloud sizes
+    scan_size = len(scan_tobe_mapped.points)
+    map_size = len(global_map_in_FOV.points)
+    node.get_logger().info(f'Scan points: {scan_size}, Map FOV points: {map_size}')
+    
+    if scan_size == 0:
+        node.get_logger().error('Current scan is EMPTY!')
+        return False
+    if map_size == 0:
+        node.get_logger().error('Map in FOV is EMPTY! Check pose estimate or increase FOV_FAR')
+        return False
+
     # 粗配准
-    transformation, _ = registration_at_scale(scan_tobe_mapped, global_map_in_FOV, initial=pose_estimation, scale=5)
+    transformation, fitness_coarse = registration_at_scale(scan_tobe_mapped, global_map_in_FOV, initial=pose_estimation, scale=5)
+    node.get_logger().info(f'Coarse registration fitness: {fitness_coarse:.4f}')
 
     # 精配准
     transformation, fitness = registration_at_scale(scan_tobe_mapped, global_map_in_FOV, initial=transformation, scale=1)
+    node.get_logger().info(f'Fine registration fitness: {fitness:.4f}')
     
     toc = time.time()
     node.get_logger().info(f'Time: {toc - tic}')
@@ -278,8 +297,14 @@ class GlobalLocalizationNode(Node):
         
         # 转换为pcd
         pc = msg_to_array(pc_msg)
-        cur_scan = o3d.geometry.PointCloud()
-        cur_scan.points = o3d.utility.Vector3dVector(pc[:, :3])
+        self.get_logger().info(f'Received scan with {len(pc)} points from /cloud_registered', throttle_duration_sec=2.0)
+        
+        if len(pc) == 0:
+            self.get_logger().warn('Received EMPTY point cloud from /cloud_registered!', throttle_duration_sec=5.0)
+            cur_scan = o3d.geometry.PointCloud()  # Create empty point cloud
+        else:
+            cur_scan = o3d.geometry.PointCloud()
+            cur_scan.points = o3d.utility.Vector3dVector(pc[:, :3])
     
     def cb_initialpose(self, pose_msg):
         global initialized, T_map_to_odom
@@ -336,13 +361,13 @@ SCAN_VOXEL_SIZE = 0.1
 FREQ_LOCALIZATION = 0.5
 
 # The threshold of global localization
-LOCALIZATION_TH = 0.6
+LOCALIZATION_TH = 0.5  # Lowered from 0.95 - fitness >0.3 is reasonable for real scans
 
 # FOV(rad), modify this according to your LiDAR type
 FOV = 1.6
 
 # The farthest distance(meters) within FOV
-FOV_FAR = 150
+FOV_FAR = 300  # Increased to capture more map points for debugging
 
 
 def main(args=None):

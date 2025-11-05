@@ -15,7 +15,7 @@ def generate_launch_description():
     pkg_dir = get_package_share_directory('fast_lio_localization')
     
     # Default map path - try install directory first, then source directory
-    default_map_path = os.path.join(pkg_dir, 'PCD', 'scans.pcd')
+    default_map_path = os.path.join(pkg_dir, 'PCD', 'mapping4.pcd')
     
     # Default 2D map path (PGM)
     default_2d_map_path = os.path.join(pkg_dir, 'maps', 'mapping4.yaml')
