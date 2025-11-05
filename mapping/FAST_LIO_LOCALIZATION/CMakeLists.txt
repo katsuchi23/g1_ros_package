@@ -123,6 +123,7 @@ install(PROGRAMS
   scripts/publish_initial_pose.py
   scripts/find_best_position.py
   scripts/compare_poses.py
+  scripts/quick_localize.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

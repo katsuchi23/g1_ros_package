@@ -89,26 +89,25 @@ class TransformFusionNode(Node):
                 else:
                     T_map_to_odom = np.eye(4)
                 
-                # DISABLED: Broadcast TF (uncomment to enable)
-                # This is disabled so AMCL can publish map->odom transform instead
-                # rot = R.from_matrix(T_map_to_odom[:3, :3])
-                # quat = rot.as_quat()  # [x, y, z, w]
+                # Broadcast TF: map -> camera_init transform
+                rot = R.from_matrix(T_map_to_odom[:3, :3])
+                quat = rot.as_quat()  # [x, y, z, w]
                 
-                # t = TransformStamped()
-                # t.header.stamp = self.get_clock().now().to_msg()
-                # t.header.frame_id = 'map'
-                # t.child_frame_id = 'camera_init'
-                # t.transform.translation.x = T_map_to_odom[0, 3]
-                # t.transform.translation.y = T_map_to_odom[1, 3]
-                # t.transform.translation.z = T_map_to_odom[2, 3]
-                # t.transform.rotation.x = quat[0]
-                # t.transform.rotation.y = quat[1]
-                # t.transform.rotation.z = quat[2]
-                # t.transform.rotation.w = quat[3]
+                t = TransformStamped()
+                t.header.stamp = self.get_clock().now().to_msg()
+                t.header.frame_id = 'map'
+                t.child_frame_id = 'camera_init'
+                t.transform.translation.x = T_map_to_odom[0, 3]
+                t.transform.translation.y = T_map_to_odom[1, 3]
+                t.transform.translation.z = T_map_to_odom[2, 3]
+                t.transform.rotation.x = quat[0]
+                t.transform.rotation.y = quat[1]
+                t.transform.rotation.z = quat[2]
+                t.transform.rotation.w = quat[3]
                 
-                # self.tf_broadcaster.sendTransform(t)
+                self.tf_broadcaster.sendTransform(t)
                 
-                # Publish localization odometry (ENABLED)
+                # Publish localization odometry
                 if cur_odom is not None:
                     # 发布全局定位的odometry
                     localization = Odometry()

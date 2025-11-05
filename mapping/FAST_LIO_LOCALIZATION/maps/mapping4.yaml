@@ -1,4 +1,4 @@
-image: /home/rey/unitree_g1_control/ros2_ws/src/mapping/FAST_LIO_LOCALIZATION/maps/mapping4.pgm
+image: mapping4.pgm
 mode: trinary
 resolution: 0.05
 origin: [-29.1, -11, 0]

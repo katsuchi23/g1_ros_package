@@ -266,7 +266,27 @@ Visualization Manager:
           Use Fixed Frame: true
           Use rainbow: true
           Value: true
-        - Alpha: 0.6000000238418579
+        - Alpha: 0.699999988079071
+          Class: rviz_default_plugins/Map
+          Color Scheme: map
+          Draw Behind: false
+          Enabled: true
+          Name: 2D_Map
+          Topic:
+            Depth: 1
+            Durability Policy: Transient Local
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /map
+          Update Topic:
+            Depth: 1
+            Durability Policy: Transient Local
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /map_updates
+          Use Timestamp: false
+          Value: true
+        - Alpha: 0.4000000059604645
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
             Max Value: 10
@@ -284,14 +304,19 @@ Visualization Manager:
           Max Intensity: 255
           Min Color: 0; 0; 0
           Min Intensity: 0
-          Name: map
+          Name: 3D_Map_PointCloud
           Position Transformer: XYZ
-          Queue Size: 10
+          Queue Size: 1
           Selectable: true
-          Size (Pixels): 1
+          Size (Pixels): 2
           Size (m): 0.009999999776482582
           Style: Points
-          Topic: /map
+          Topic:
+            Depth: 1
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /map_pointcloud
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true

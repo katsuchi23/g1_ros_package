@@ -116,16 +116,26 @@ def generate_launch_description():
         remappings=[('cloud_pcd', '/map_pointcloud')]
     )
     
+    # Map server parameters with QoS override for RViz compatibility
+    map_server_params = PathJoinSubstitution([
+        FindPackageShare('fast_lio_localization'),
+        'config',
+        'map_server_params.yaml'
+    ])
+    
     # 2D Map server (publishes occupancy grid)
     map_server_node = Node(
         package='nav2_map_server',
         executable='map_server',
         name='map_server',
         output='screen',
-        parameters=[{
-            'yaml_filename': LaunchConfiguration('map_2d'),
-            'frame_id': 'map'
-        }],
+        parameters=[
+            map_server_params,
+            {
+                'yaml_filename': LaunchConfiguration('map_2d'),
+                'frame_id': 'map',
+            }
+        ],
         condition=IfCondition(LaunchConfiguration('use_2d_map'))
     )
     
@@ -170,8 +180,8 @@ def generate_launch_description():
     return LaunchDescription([
         rviz_arg,
         map_arg,
-        # map_2d_arg,
-        # use_2d_map_arg,
+        map_2d_arg,
+        use_2d_map_arg,
         use_bag_arg,
         bag_path_arg,
         bag_rate_arg,
@@ -179,8 +189,8 @@ def generate_launch_description():
         global_localization_node,
         transform_fusion_node,
         map_publisher_node,
-        # map_server_node,
-        # lifecycle_manager_node,
-        # rviz_node,
+        map_server_node,
+        lifecycle_manager_node,
+        rviz_node,
         bag_player,
     ])
