@@ -11,3 +11,4 @@ mapping/FAST_LIO_LOCALIZATION/PCD/**/*.pcd
 
 # Ignore PCD files anywhere in the workspace (optional)
 **/*.pcd
+testing_bag/
