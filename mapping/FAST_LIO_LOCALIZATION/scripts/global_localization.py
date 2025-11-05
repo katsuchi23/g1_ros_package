@@ -140,6 +140,8 @@ def global_localization(pose_estimation, node, pub_map_to_odom, publish_initial=
     publish_point_cloud(node.pub_submap, header, np.array(global_map_in_FOV.points)[::10])
 
     # 粗配准
+    # ICP: aligns source (scan in camera_init) to target (map in map frame)
+    # Returns transformation from camera_init -> map
     transformation, _ = registration_at_scale(scan_tobe_mapped, global_map_in_FOV, initial=pose_estimation, scale=5)
 
     # 精配准
@@ -149,14 +151,19 @@ def global_localization(pose_estimation, node, pub_map_to_odom, publish_initial=
     node.get_logger().info('Time: {}'.format(toc - tic))
     node.get_logger().info('')
 
-    # 当全局定位成功时才更新map2odom (Exactly like ROS1)
+    # 当全局定位成功时才更新map2odom
     if fitness > LOCALIZATION_TH:
-        # EXACT ROS1 logic: T_map_to_odom = transformation (no inversion!)
-        T_map_to_odom = transformation
+        # CRITICAL FIX: ICP gives us camera_init->map, but we need map->camera_init
+        # The scan is in camera_init frame, map is in map frame
+        # ICP returns T such that: map_points ≈ T @ camera_init_points
+        # So T is camera_init->map, but we publish map->odom (which is map->camera_init)
+        # Therefore we must INVERT the ICP result
+        T_map_to_odom = inverse_se3(transformation)
 
         # Log the comparison for debugging (always show this)
-        node.get_logger().info(f'Initial estimate: x={pose_estimation[0,3]:.2f}, y={pose_estimation[1,3]:.2f}, z={pose_estimation[2,3]:.2f}')
-        node.get_logger().info(f'ICP result:       x={T_map_to_odom[0,3]:.2f}, y={T_map_to_odom[1,3]:.2f}, z={T_map_to_odom[2,3]:.2f}')
+        node.get_logger().info(f'Initial estimate:     x={pose_estimation[0,3]:.2f}, y={pose_estimation[1,3]:.2f}, z={pose_estimation[2,3]:.2f}')
+        node.get_logger().info(f'ICP raw result:       x={transformation[0,3]:.2f}, y={transformation[1,3]:.2f}, z={transformation[2,3]:.2f}')
+        node.get_logger().info(f'ICP inverted (final): x={T_map_to_odom[0,3]:.2f}, y={T_map_to_odom[1,3]:.2f}, z={T_map_to_odom[2,3]:.2f}')
 
         # 发布map_to_odom (Exact ROS1 style) - this goes to camera_init frame
         map_to_odom = Odometry()
