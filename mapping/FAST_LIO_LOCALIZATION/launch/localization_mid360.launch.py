@@ -83,7 +83,8 @@ def generate_launch_description():
         executable='fastlio_mapping',
         name='laserMapping',
         output='screen',
-        parameters=[config_file]
+        parameters=[config_file],
+        arguments=['--ros-args', '--log-level', 'warn']
     )
     
     # Global localization node
@@ -91,7 +92,8 @@ def generate_launch_description():
         package='fast_lio_localization',
         executable='global_localization.py',
         name='global_localization',
-        output='screen'
+        output='screen',
+        arguments=['--ros-args', '--log-level', 'info']
     )
     
     # Transform fusion node
@@ -99,7 +101,8 @@ def generate_launch_description():
         package='fast_lio_localization',
         executable='transform_fusion.py',
         name='transform_fusion',
-        output='screen'
+        output='screen',
+        arguments=['--ros-args', '--log-level', 'warn']
     )
     
     # Map publisher (using pcl_ros pcd_to_pointcloud)
@@ -113,7 +116,8 @@ def generate_launch_description():
             'frame_id': 'map',
             'publishing_rate': 5.0,
         }],
-        remappings=[('cloud_pcd', '/map_pointcloud')]
+        remappings=[('cloud_pcd', '/map_pointcloud')],
+        arguments=['--ros-args', '--log-level', 'warn']
     )
     
     # Map server parameters with QoS override for RViz compatibility
@@ -136,6 +140,7 @@ def generate_launch_description():
                 'frame_id': 'map',
             }
         ],
+        arguments=['--ros-args', '--log-level', 'warn'],
         condition=IfCondition(LaunchConfiguration('use_2d_map'))
     )
     
@@ -149,6 +154,7 @@ def generate_launch_description():
             'autostart': True,
             'node_names': ['map_server']
         }],
+        arguments=['--ros-args', '--log-level', 'error'],
         condition=IfCondition(LaunchConfiguration('use_2d_map'))
     )
     

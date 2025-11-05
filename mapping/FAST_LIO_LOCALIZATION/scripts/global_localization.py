@@ -16,10 +16,11 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPo
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
-from geometry_msgs.msg import PoseWithCovarianceStamped, Pose, Point, Quaternion
+from geometry_msgs.msg import PoseWithCovarianceStamped, Pose, Point, Quaternion, TransformStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import PointCloud2
 import sensor_msgs_py.point_cloud2 as pc2
+from tf2_ros import TransformBroadcaster
 
 global_map = None
 initialized = False
@@ -29,7 +30,10 @@ cur_scan = None
 
 
 def pose_to_mat(pose_msg):
-    """Convert pose message to 4x4 transformation matrix"""
+    """Convert pose message to 4x4 transformation matrix
+    Following ROS1 logic: multiply translation matrix with rotation matrix
+    This matches tf.listener.xyz_to_mat44 @ tf.listener.xyzw_to_mat44
+    """
     pos = pose_msg.pose.pose.position
     ori = pose_msg.pose.pose.orientation
     
@@ -42,7 +46,9 @@ def pose_to_mat(pose_msg):
     rot_mat = np.eye(4)
     rot_mat[0:3, 0:3] = rot.as_matrix()
     
-    return trans_mat @ rot_mat
+    # ROS1 does: np.matmul(xyz_to_mat44, xyzw_to_mat44)
+    # which is translation @ rotation
+    return np.matmul(trans_mat, rot_mat)
 
 
 def msg_to_array(pc_msg):
@@ -59,7 +65,7 @@ def registration_at_scale(pc_scan, pc_map, initial, scale):
         voxel_down_sample(pc_map, MAP_VOXEL_SIZE * scale),
         1.0 * scale, initial,
         o3d.pipelines.registration.TransformationEstimationPointToPoint(),
-        o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=50)  # Increased from 20 to 50
+        o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=20)  # match ROS1 logic
     )
     return result_icp.transformation, result_icp.fitness
 
@@ -83,8 +89,8 @@ def publish_point_cloud(publisher, header, pc):
     publisher.publish(msg)
 
 
-def crop_global_map_in_FOV(global_map, pose_estimation, cur_odom, pub_submap):
-    # 当前scan原点的位姿
+def crop_global_map_in_FOV(global_map, pose_estimation, cur_odom):
+    # 当前scan原点的位姿 (Copied exactly from ROS1)
     T_odom_to_base_link = pose_to_mat(cur_odom)
     T_map_to_base_link = np.matmul(pose_estimation, T_odom_to_base_link)
     T_base_link_to_map = inverse_se3(T_map_to_base_link)
@@ -113,69 +119,46 @@ def crop_global_map_in_FOV(global_map, pose_estimation, cur_odom, pub_submap):
     global_map_in_FOV = o3d.geometry.PointCloud()
     global_map_in_FOV.points = o3d.utility.Vector3dVector(np.squeeze(global_map_in_map[indices, :3]))
 
-    # 发布fov内点云
-    header = cur_odom.header
-    header.frame_id = 'map'
-    publish_point_cloud(pub_submap, header, np.array(global_map_in_FOV.points)[::10])
-
     return global_map_in_FOV
 
 
-def global_localization(pose_estimation, node, pub_map_to_odom):
+def global_localization(pose_estimation, node, pub_map_to_odom, publish_initial=True):
     global global_map, cur_scan, cur_odom, T_map_to_odom
-    
+    # 用icp配准 (Copied exactly from ROS1)
     node.get_logger().info('Global localization by scan-to-map matching......')
 
-    # Proper deep copy by copying the numpy array data
-    scan_tobe_mapped = o3d.geometry.PointCloud()
-    if cur_scan is not None and len(cur_scan.points) > 0:
-        scan_tobe_mapped.points = o3d.utility.Vector3dVector(np.array(cur_scan.points))
-    else:
-        node.get_logger().error('cur_scan is None or empty before copying!')
-        return False
+    # TODO 这里注意线程安全
+    scan_tobe_mapped = copy.copy(cur_scan)
 
     tic = time.time()
 
-    global_map_in_FOV = crop_global_map_in_FOV(global_map, pose_estimation, cur_odom, node.pub_submap)
-
-    # Debug: Check point cloud sizes
-    scan_size = len(scan_tobe_mapped.points)
-    map_size = len(global_map_in_FOV.points)
-    node.get_logger().info(f'Scan points: {scan_size}, Map FOV points: {map_size}')
+    global_map_in_FOV = crop_global_map_in_FOV(global_map, pose_estimation, cur_odom)
     
-    if scan_size == 0:
-        node.get_logger().error('Current scan is EMPTY!')
-        return False
-    if map_size == 0:
-        node.get_logger().error('Map in FOV is EMPTY! Check pose estimate or increase FOV_FAR')
-        return False
+    # Publish submap for visualization
+    header = cur_odom.header
+    header.frame_id = 'map'
+    publish_point_cloud(node.pub_submap, header, np.array(global_map_in_FOV.points)[::10])
 
     # 粗配准
-    transformation, fitness_coarse = registration_at_scale(scan_tobe_mapped, global_map_in_FOV, initial=pose_estimation, scale=5)
-    node.get_logger().info(f'Coarse registration fitness: {fitness_coarse:.4f}')
+    transformation, _ = registration_at_scale(scan_tobe_mapped, global_map_in_FOV, initial=pose_estimation, scale=5)
 
     # 精配准
     transformation, fitness = registration_at_scale(scan_tobe_mapped, global_map_in_FOV, initial=transformation, scale=1)
-    node.get_logger().info(f'Fine registration fitness: {fitness:.4f}')
     
     toc = time.time()
-    node.get_logger().info(f'Time: {toc - tic}')
+    node.get_logger().info('Time: {}'.format(toc - tic))
     node.get_logger().info('')
 
-    # 当全局定位成功时才更新map2odom
+    # 当全局定位成功时才更新map2odom (Exactly like ROS1)
     if fitness > LOCALIZATION_TH:
-        T_map_to_odom = np.array(transformation, copy=True)
-        success = True
-    else:
-        node.get_logger().warn('Not match!!!!')
-        node.get_logger().warn(f'{transformation}')
-        node.get_logger().warn(f'fitness score:{fitness}')
-        success = False
-    
-    # 发布当前的map_to_odom (成功时是新值，失败时保持旧值)
-    # 只有在初始化后才发布
-    global initialized
-    if initialized:
+        # EXACT ROS1 logic: T_map_to_odom = transformation (no inversion!)
+        T_map_to_odom = transformation
+
+        # Log the comparison for debugging (always show this)
+        node.get_logger().info(f'Initial estimate: x={pose_estimation[0,3]:.2f}, y={pose_estimation[1,3]:.2f}, z={pose_estimation[2,3]:.2f}')
+        node.get_logger().info(f'ICP result:       x={T_map_to_odom[0,3]:.2f}, y={T_map_to_odom[1,3]:.2f}, z={T_map_to_odom[2,3]:.2f}')
+
+        # 发布map_to_odom (Exact ROS1 style) - this goes to camera_init frame
         map_to_odom = Odometry()
         rot = R.from_matrix(T_map_to_odom[:3, :3])
         quat = rot.as_quat()  # [x, y, z, w]
@@ -187,8 +170,14 @@ def global_localization(pose_estimation, node, pub_map_to_odom):
         map_to_odom.header.stamp = cur_odom.header.stamp
         map_to_odom.header.frame_id = 'map'
         pub_map_to_odom.publish(map_to_odom)
-    
-    return success
+        
+        node.get_logger().info('✓ LOCALIZATION SUCCESS!')
+        return True
+    else:
+        node.get_logger().warn('Not match!!!!')
+        node.get_logger().warn('{}'.format(transformation))
+        node.get_logger().warn('fitness score:{}'.format(fitness))
+        return False
 
 
 def voxel_down_sample(pcd, voxel_size):
@@ -220,6 +209,17 @@ class GlobalLocalizationNode(Node):
         self.pub_submap = self.create_publisher(PointCloud2, '/submap', 1)
         self.pub_map_to_odom = self.create_publisher(Odometry, '/map_to_odom', 1)
         
+        # TF broadcaster for debug frames
+        self.debug_tf_broadcaster = TransformBroadcaster(self)
+        
+        # Store initial pose transform for continuous republishing
+        self.initial_transform = None
+        self.initial_transform_lock = threading.Lock()
+        
+        # Simple counters to limit logging frequency for high-rate topics
+        self.odom_log_count = 0
+        self.scan_log_count = 0
+        
         # Subscribers
         self.sub_scan = self.create_subscription(
             PointCloud2, '/cloud_registered', self.cb_save_cur_scan, sensor_qos)
@@ -239,6 +239,9 @@ class GlobalLocalizationNode(Node):
         self.map_check_timer = self.create_timer(2.0, self.check_map_status)
         self.map_received = False
         
+        # Timer to continuously publish initial transform
+        self.initial_tf_timer = self.create_timer(0.1, self.publish_initial_transform)  # 10 Hz
+        
         # Start thread to publish identity transform before initialization
         self.pre_init_publisher_thread = threading.Thread(target=self.publish_identity_before_init, daemon=True)
         self.pre_init_publisher_thread.start()
@@ -248,6 +251,14 @@ class GlobalLocalizationNode(Node):
         global global_map
         if not self.map_received and global_map is None:
             self.get_logger().warn('Still waiting for map on /map_pointcloud topic. Make sure pcd_to_pointcloud is publishing.')
+    
+    def publish_initial_transform(self):
+        """Continuously publish the initial transform to keep it alive in TF tree"""
+        with self.initial_transform_lock:
+            if self.initial_transform is not None:
+                # Update timestamp to current time
+                self.initial_transform.header.stamp = self.get_clock().now().to_msg()
+                self.debug_tf_broadcaster.sendTransform(self.initial_transform)
     
     def publish_identity_before_init(self):
         """Publish identity transform (zeros) before initialization to avoid jittering"""
@@ -281,36 +292,50 @@ class GlobalLocalizationNode(Node):
         global_map = voxel_down_sample(global_map, MAP_VOXEL_SIZE)
         self.map_received = True
         self.map_check_timer.cancel()  # Stop the checking timer once map is received
-        # self.get_logger().info(f'Global map received with {len(global_map.points)} points.')
+        self.get_logger().info(f'Global map received with {len(global_map.points)} points.')
     
     def cb_save_cur_odom(self, odom_msg):
         global cur_odom
         cur_odom = odom_msg
+        # Log odometry frame and a rough pose occasionally so we can check frame conventions
+        self.odom_log_count += 1
+        if self.odom_log_count % 20 == 1:
+            try:
+                p = cur_odom.pose.pose.position
+                self.get_logger().info(f"Received Odometry - header.frame_id={cur_odom.header.frame_id}, pose=({p.x:.2f},{p.y:.2f},{p.z:.2f})")
+            except Exception:
+                self.get_logger().info('Received Odometry (could not parse pose)')
     
     def cb_save_cur_scan(self, pc_msg):
         global cur_scan
         
         # 注意这里fastlio直接将scan转到odom系下了 不是lidar局部系
+        # Mark the incoming scan as in camera_init frame (FAST-LIO publishes in odom/camera_init)
         pc_msg.header.frame_id = 'camera_init'
         pc_msg.header.stamp = self.get_clock().now().to_msg()
         self.pub_pc_in_map.publish(pc_msg)
-        
-        # 转换为pcd
+
+        # Convert to numpy array and create Open3D point cloud
         pc = msg_to_array(pc_msg)
-        self.get_logger().info(f'Received scan with {len(pc)} points from /cloud_registered', throttle_duration_sec=2.0)
-        
+        # Throttle scan logging to avoid log spam
+        self.scan_log_count += 1
+        if self.scan_log_count % 5 == 1:
+            self.get_logger().info(f'Received scan with {len(pc)} points from /cloud_registered')
+
         if len(pc) == 0:
-            self.get_logger().warn('Received EMPTY point cloud from /cloud_registered!', throttle_duration_sec=5.0)
+            self.get_logger().warn('Received EMPTY point cloud from /cloud_registered!')
             cur_scan = o3d.geometry.PointCloud()  # Create empty point cloud
         else:
             cur_scan = o3d.geometry.PointCloud()
             cur_scan.points = o3d.utility.Vector3dVector(pc[:, :3])
     
     def cb_initialpose(self, pose_msg):
-        global initialized, T_map_to_odom
+        global initialized, T_map_to_odom, cur_odom
         
         if not initialized:
-            self.get_logger().info('Received initial pose estimate from RViz...')
+            self.get_logger().info('========================================')
+            self.get_logger().info('Received initial pose estimate from RViz')
+            self.get_logger().info(f'Position: x={pose_msg.pose.pose.position.x:.2f}, y={pose_msg.pose.pose.position.y:.2f}, z={pose_msg.pose.pose.position.z:.2f}')
             
             # Check what's missing
             if global_map is None:
@@ -328,7 +353,31 @@ class GlobalLocalizationNode(Node):
                 return
             
             initial_pose = pose_to_mat(pose_msg)
-            initialized = global_localization(initial_pose, self, self.pub_map_to_odom)
+            self.get_logger().info(f'Initial pose header.frame_id: {pose_msg.header.frame_id}')
+            self.get_logger().info(f'Initial pose matrix:\n{initial_pose}')
+            
+            # DEBUG: Store initial transform for continuous publishing
+            initial_transform = TransformStamped()
+            initial_transform.header.stamp = self.get_clock().now().to_msg()
+            initial_transform.header.frame_id = 'map'
+            initial_transform.child_frame_id = 'camera_init_initial'
+            rot_initial = R.from_matrix(initial_pose[:3, :3])
+            quat_initial = rot_initial.as_quat()
+            initial_transform.transform.translation.x = initial_pose[0, 3]
+            initial_transform.transform.translation.y = initial_pose[1, 3]
+            initial_transform.transform.translation.z = initial_pose[2, 3]
+            initial_transform.transform.rotation.x = quat_initial[0]
+            initial_transform.transform.rotation.y = quat_initial[1]
+            initial_transform.transform.rotation.z = quat_initial[2]
+            initial_transform.transform.rotation.w = quat_initial[3]
+            
+            # Store it for continuous republishing by timer
+            with self.initial_transform_lock:
+                self.initial_transform = initial_transform
+            
+            self.get_logger().info(f'Set camera_init_initial at: x={initial_pose[0,3]:.2f}, y={initial_pose[1,3]:.2f}, z={initial_pose[2,3]:.2f}')
+            
+            initialized = global_localization(initial_pose, self, self.pub_map_to_odom, publish_initial=False)
             if initialized:
                 self.get_logger().info('')
                 self.get_logger().info('Initialize successfully!!!!!!')
@@ -342,13 +391,19 @@ class GlobalLocalizationNode(Node):
     def thread_localization(self):
         global T_map_to_odom
         rate = self.create_rate(FREQ_LOCALIZATION)
+        localization_count = 0
         
         while rclpy.ok():
             try:
                 # 每隔一段时间进行全局定位
                 rate.sleep()
+                localization_count += 1
+                # Only log every 10th iteration to reduce spam
+                if localization_count % 10 == 1:
+                    self.get_logger().info(f'Periodic localization update #{localization_count}...')
                 # TODO 由于这里Fast lio发布的scan是已经转换到odom系下了 所以每次全局定位的初始解就是上一次的map2odom 不需要再拿odom了
-                global_localization(T_map_to_odom, self, self.pub_map_to_odom)
+                # Don't publish initial frame during periodic updates
+                global_localization(T_map_to_odom, self, self.pub_map_to_odom, publish_initial=False)
             except Exception as e:
                 self.get_logger().error(f'Localization error: {e}')
 
