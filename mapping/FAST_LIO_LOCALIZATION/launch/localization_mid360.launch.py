@@ -12,19 +12,13 @@ import os
 
 def generate_launch_description():
     # Get package directory
-    pkg_share = FindPackageShare('fast_lio_localization').find('fast_lio_localization')
     pkg_dir = get_package_share_directory('fast_lio_localization')
     
     # Default map path - try install directory first, then source directory
     default_map_path = os.path.join(pkg_dir, 'PCD', 'scans.pcd')
     
-    # Fallback to source directory if not found in install
-    if not os.path.exists(default_map_path):
-        # Try to find source directory
-        src_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(pkg_dir))), 
-                                'src', 'mapping', 'FAST_LIO_LOCALIZATION', 'PCD', 'scans.pcd')
-        if os.path.exists(src_path):
-            default_map_path = src_path
+    # Default 2D map path (PGM)
+    default_2d_map_path = os.path.join(pkg_dir, 'maps', 'mapping4.yaml')
     
     # Default rosbag path
     default_bag_path = os.path.join(
@@ -44,6 +38,18 @@ def generate_launch_description():
         'map',
         default_value=default_map_path,
         description='Path to the PCD map file'
+    )
+    
+    map_2d_arg = DeclareLaunchArgument(
+        'map_2d',
+        default_value=default_2d_map_path,
+        description='Path to the 2D map YAML file'
+    )
+    
+    use_2d_map_arg = DeclareLaunchArgument(
+        'use_2d_map',
+        default_value='true',
+        description='Launch map_server to publish 2D occupancy grid map'
     )
     
     use_bag_arg = DeclareLaunchArgument(
@@ -103,10 +109,37 @@ def generate_launch_description():
         name='map_publisher',
         output='screen',
         parameters=[{
+            'file_name': LaunchConfiguration('map'),
             'frame_id': 'map',
+            'publishing_rate': 5.0,
         }],
-        arguments=[LaunchConfiguration('map'), '5.0'],
-        remappings=[('cloud_pcd', '/map')]
+        remappings=[('cloud_pcd', '/map_pointcloud')]
+    )
+    
+    # 2D Map server (publishes occupancy grid)
+    map_server_node = Node(
+        package='nav2_map_server',
+        executable='map_server',
+        name='map_server',
+        output='screen',
+        parameters=[{
+            'yaml_filename': LaunchConfiguration('map_2d'),
+            'frame_id': 'map'
+        }],
+        condition=IfCondition(LaunchConfiguration('use_2d_map'))
+    )
+    
+    # Lifecycle manager for map_server
+    lifecycle_manager_node = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_localization',
+        output='screen',
+        parameters=[{
+            'autostart': True,
+            'node_names': ['map_server']
+        }],
+        condition=IfCondition(LaunchConfiguration('use_2d_map'))
     )
     
     # RViz2
@@ -137,6 +170,8 @@ def generate_launch_description():
     return LaunchDescription([
         rviz_arg,
         map_arg,
+        # map_2d_arg,
+        # use_2d_map_arg,
         use_bag_arg,
         bag_path_arg,
         bag_rate_arg,
@@ -144,6 +179,8 @@ def generate_launch_description():
         global_localization_node,
         transform_fusion_node,
         map_publisher_node,
+        # map_server_node,
+        # lifecycle_manager_node,
         # rviz_node,
         bag_player,
     ])

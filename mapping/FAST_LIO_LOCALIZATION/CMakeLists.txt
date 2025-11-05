@@ -121,6 +121,7 @@ install(PROGRAMS
   scripts/global_localization.py
   scripts/transform_fusion.py
   scripts/publish_initial_pose.py
+  scripts/find_best_position.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -130,6 +131,7 @@ install(DIRECTORY
   config
   rviz_cfg
   PCD
+  maps
   DESTINATION share/${PROJECT_NAME}
 )
 

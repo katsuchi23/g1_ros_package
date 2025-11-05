@@ -89,51 +89,56 @@ class TransformFusionNode(Node):
                 else:
                     T_map_to_odom = np.eye(4)
                 
-                # Broadcast TF
-                rot = R.from_matrix(T_map_to_odom[:3, :3])
-                quat = rot.as_quat()  # [x, y, z, w]
+                # DISABLED: Broadcast TF (uncomment to enable)
+                # This is disabled so AMCL can publish map->odom transform instead
+                # rot = R.from_matrix(T_map_to_odom[:3, :3])
+                # quat = rot.as_quat()  # [x, y, z, w]
                 
-                t = TransformStamped()
-                t.header.stamp = self.get_clock().now().to_msg()
-                t.header.frame_id = 'map'
-                t.child_frame_id = 'camera_init'
-                t.transform.translation.x = T_map_to_odom[0, 3]
-                t.transform.translation.y = T_map_to_odom[1, 3]
-                t.transform.translation.z = T_map_to_odom[2, 3]
-                t.transform.rotation.x = quat[0]
-                t.transform.rotation.y = quat[1]
-                t.transform.rotation.z = quat[2]
-                t.transform.rotation.w = quat[3]
+                # t = TransformStamped()
+                # t.header.stamp = self.get_clock().now().to_msg()
+                # t.header.frame_id = 'map'
+                # t.child_frame_id = 'camera_init'
+                # t.transform.translation.x = T_map_to_odom[0, 3]
+                # t.transform.translation.y = T_map_to_odom[1, 3]
+                # t.transform.translation.z = T_map_to_odom[2, 3]
+                # t.transform.rotation.x = quat[0]
+                # t.transform.rotation.y = quat[1]
+                # t.transform.rotation.z = quat[2]
+                # t.transform.rotation.w = quat[3]
                 
-                self.tf_broadcaster.sendTransform(t)
+                # self.tf_broadcaster.sendTransform(t)
                 
-                if cur_odom is not None:
-                    # 发布全局定位的odometry
-                    localization = Odometry()
-                    T_odom_to_base_link = pose_to_mat(cur_odom)
-                    # 这里T_map_to_odom短时间内变化缓慢 暂时不考虑与T_odom_to_base_link时间同步
-                    T_map_to_base_link = np.matmul(T_map_to_odom, T_odom_to_base_link)
+                # DISABLED: Publish localization odometry (uncomment to enable)
+                # if cur_odom is not None:
+                #     # 发布全局定位的odometry
+                #     localization = Odometry()
+                #     T_odom_to_base_link = pose_to_mat(cur_odom)
+                #     # 这里T_map_to_odom短时间内变化缓慢 暂时不考虑与T_odom_to_base_link时间同步
+                #     T_map_to_base_link = np.matmul(T_map_to_odom, T_odom_to_base_link)
                     
-                    rot = R.from_matrix(T_map_to_base_link[:3, :3])
-                    quat = rot.as_quat()  # [x, y, z, w]
+                #     rot = R.from_matrix(T_map_to_base_link[:3, :3])
+                #     quat = rot.as_quat()  # [x, y, z, w]
                     
-                    localization.pose.pose = Pose(
-                        position=Point(
-                            x=T_map_to_base_link[0, 3],
-                            y=T_map_to_base_link[1, 3],
-                            z=T_map_to_base_link[2, 3]
-                        ),
-                        orientation=Quaternion(
-                            x=quat[0], y=quat[1], z=quat[2], w=quat[3]
-                        )
-                    )
-                    localization.twist = cur_odom.twist
+                #     localization.pose.pose = Pose(
+                #         position=Point(
+                #             x=T_map_to_base_link[0, 3],
+                #             y=T_map_to_base_link[1, 3],
+                #             z=T_map_to_base_link[2, 3]
+                #         ),
+                #         orientation=Quaternion(
+                #             x=quat[0], y=quat[1], z=quat[2], w=quat[3]
+                #         )
+                #     )
+                #     localization.twist = cur_odom.twist
                     
-                    localization.header.stamp = cur_odom.header.stamp
-                    localization.header.frame_id = 'map'
-                    localization.child_frame_id = 'body'
+                #     localization.header.stamp = cur_odom.header.stamp
+                #     localization.header.frame_id = 'map'
+                #     localization.child_frame_id = 'body'
                     
-                    self.pub_localization.publish(localization)
+                #     self.pub_localization.publish(localization)
+                
+                # Just sleep to keep thread alive
+                pass
                 
                 rate.sleep()
                 

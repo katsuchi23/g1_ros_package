@@ -59,7 +59,7 @@ def registration_at_scale(pc_scan, pc_map, initial, scale):
         voxel_down_sample(pc_map, MAP_VOXEL_SIZE * scale),
         1.0 * scale, initial,
         o3d.pipelines.registration.TransformationEstimationPointToPoint(),
-        o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=20)
+        o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=50)  # Increased from 20 to 50
     )
     return result_icp.transformation, result_icp.fitness
 
@@ -77,9 +77,9 @@ def publish_point_cloud(publisher, header, pc):
     """Publish point cloud"""
     points_list = []
     for point in pc:
-        points_list.append([point[0], point[1], point[2], 0.0])  # x, y, z, intensity
+        points_list.append([point[0], point[1], point[2]])  # x, y, z only
     
-    msg = pc2.create_cloud_xyz32(header, points_list[:, :3])
+    msg = pc2.create_cloud_xyz32(header, points_list)
     publisher.publish(msg)
 
 
@@ -145,9 +145,18 @@ def global_localization(pose_estimation, node, pub_map_to_odom):
 
     # 当全局定位成功时才更新map2odom
     if fitness > LOCALIZATION_TH:
-        T_map_to_odom = transformation
-
-        # 发布map_to_odom
+        T_map_to_odom = np.array(transformation, copy=True)
+        success = True
+    else:
+        node.get_logger().warn('Not match!!!!')
+        node.get_logger().warn(f'{transformation}')
+        node.get_logger().warn(f'fitness score:{fitness}')
+        success = False
+    
+    # 发布当前的map_to_odom (成功时是新值，失败时保持旧值)
+    # 只有在初始化后才发布
+    global initialized
+    if initialized:
         map_to_odom = Odometry()
         rot = R.from_matrix(T_map_to_odom[:3, :3])
         quat = rot.as_quat()  # [x, y, z, w]
@@ -159,12 +168,8 @@ def global_localization(pose_estimation, node, pub_map_to_odom):
         map_to_odom.header.stamp = cur_odom.header.stamp
         map_to_odom.header.frame_id = 'map'
         pub_map_to_odom.publish(map_to_odom)
-        return True
-    else:
-        node.get_logger().warn('Not match!!!!')
-        node.get_logger().warn(f'{transformation}')
-        node.get_logger().warn(f'fitness score:{fitness}')
-        return False
+    
+    return success
 
 
 def voxel_down_sample(pcd, voxel_size):
@@ -173,7 +178,7 @@ def voxel_down_sample(pcd, voxel_size):
 
 class GlobalLocalizationNode(Node):
     def __init__(self):
-        super().__init__('fast_lio_localization')
+        super().__init__('global_localization')
         
         # QoS profiles
         sensor_qos = QoSProfile(
@@ -181,6 +186,14 @@ class GlobalLocalizationNode(Node):
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             depth=1
+        )
+        
+        # QoS for map - match the pcd_to_pointcloud publisher QoS (VOLATILE)
+        map_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
         )
         
         # Publishers
@@ -194,15 +207,52 @@ class GlobalLocalizationNode(Node):
         self.sub_odom = self.create_subscription(
             Odometry, '/Odometry', self.cb_save_cur_odom, sensor_qos)
         self.sub_map = self.create_subscription(
-            PointCloud2, '/map', self.initialize_global_map, sensor_qos)
+            PointCloud2, '/map_pointcloud', self.initialize_global_map, map_qos)
         self.sub_initialpose = self.create_subscription(
             PoseWithCovarianceStamped, '/initialpose', self.cb_initialpose, 10)
         
         self.get_logger().info('Localization Node Inited...')
-        self.get_logger().warn('Waiting for global map......')
+        self.get_logger().warn('Waiting for global map from /map_pointcloud topic......')
         
         self.localization_thread = None
         
+        # Create a timer to check map status periodically
+        self.map_check_timer = self.create_timer(2.0, self.check_map_status)
+        self.map_received = False
+        
+        # Start thread to publish identity transform before initialization
+        self.pre_init_publisher_thread = threading.Thread(target=self.publish_identity_before_init, daemon=True)
+        self.pre_init_publisher_thread.start()
+        
+    def check_map_status(self):
+        """Periodically check if map has been received"""
+        global global_map
+        if not self.map_received and global_map is None:
+            self.get_logger().warn('Still waiting for map on /map_pointcloud topic. Make sure pcd_to_pointcloud is publishing.')
+    
+    def publish_identity_before_init(self):
+        """Publish identity transform (zeros) before initialization to avoid jittering"""
+        global initialized, cur_odom
+        rate = self.create_rate(10)  # 10 Hz
+        
+        while rclpy.ok() and not initialized:
+            try:
+                if cur_odom is not None:
+                    # Publish identity transform (map = camera_init)
+                    map_to_odom = Odometry()
+                    map_to_odom.pose.pose = Pose(
+                        position=Point(x=0.0, y=0.0, z=0.0),
+                        orientation=Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
+                    )
+                    map_to_odom.header.stamp = cur_odom.header.stamp
+                    map_to_odom.header.frame_id = 'map'
+                    self.pub_map_to_odom.publish(map_to_odom)
+                
+                rate.sleep()
+            except Exception as e:
+                self.get_logger().error(f'Pre-init publisher error: {e}')
+                break
+    
     def initialize_global_map(self, pc_msg):
         global global_map
         
@@ -210,7 +260,9 @@ class GlobalLocalizationNode(Node):
         pc_array = msg_to_array(pc_msg)
         global_map.points = o3d.utility.Vector3dVector(pc_array[:, :3])
         global_map = voxel_down_sample(global_map, MAP_VOXEL_SIZE)
-        self.get_logger().info('Global map received.')
+        self.map_received = True
+        self.map_check_timer.cancel()  # Stop the checking timer once map is received
+        # self.get_logger().info(f'Global map received with {len(global_map.points)} points.')
     
     def cb_save_cur_odom(self, odom_msg):
         global cur_odom
@@ -233,20 +285,34 @@ class GlobalLocalizationNode(Node):
         global initialized, T_map_to_odom
         
         if not initialized:
-            self.get_logger().warn('Waiting for initial pose....')
+            self.get_logger().info('Received initial pose estimate from RViz...')
+            
+            # Check what's missing
+            if global_map is None:
+                self.get_logger().error('Map not received yet! Make sure:')
+                self.get_logger().error('  1. The map_publisher (pcd_to_pointcloud) node is running')
+                self.get_logger().error('  2. The PCD file path is correct')
+                self.get_logger().error('  3. Check with: ros2 topic echo /map_pointcloud --once')
+                return
+            
+            if cur_scan is None:
+                self.get_logger().error('Scan not received yet! Make sure:')
+                self.get_logger().error('  1. The laserMapping node is running')
+                self.get_logger().error('  2. LiDAR data is being published')
+                self.get_logger().error('  3. Check with: ros2 topic echo /cloud_registered --once')
+                return
             
             initial_pose = pose_to_mat(pose_msg)
-            if cur_scan and global_map:
-                initialized = global_localization(initial_pose, self, self.pub_map_to_odom)
-                if initialized:
-                    self.get_logger().info('')
-                    self.get_logger().info('Initialize successfully!!!!!!')
-                    self.get_logger().info('')
-                    # 开始定期全局定位
-                    self.localization_thread = threading.Thread(target=self.thread_localization, daemon=True)
-                    self.localization_thread.start()
+            initialized = global_localization(initial_pose, self, self.pub_map_to_odom)
+            if initialized:
+                self.get_logger().info('')
+                self.get_logger().info('Initialize successfully!!!!!!')
+                self.get_logger().info('')
+                # 开始定期全局定位
+                self.localization_thread = threading.Thread(target=self.thread_localization, daemon=True)
+                self.localization_thread.start()
             else:
-                self.get_logger().warn('First scan or map not received!!!!!')
+                self.get_logger().warn('Localization failed. Try a different initial pose or check alignment.')
     
     def thread_localization(self):
         global T_map_to_odom
@@ -270,7 +336,7 @@ SCAN_VOXEL_SIZE = 0.1
 FREQ_LOCALIZATION = 0.5
 
 # The threshold of global localization
-LOCALIZATION_TH = 0.95
+LOCALIZATION_TH = 0.6
 
 # FOV(rad), modify this according to your LiDAR type
 FOV = 1.6
