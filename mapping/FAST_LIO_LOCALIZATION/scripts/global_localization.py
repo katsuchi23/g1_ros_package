@@ -299,7 +299,7 @@ class GlobalLocalizationNode(Node):
         global_map = voxel_down_sample(global_map, MAP_VOXEL_SIZE)
         self.map_received = True
         self.map_check_timer.cancel()  # Stop the checking timer once map is received
-        self.get_logger().info(f'Global map received with {len(global_map.points)} points.')
+        # self.get_logger().info(f'Global map received with {len(global_map.points)} points.')
     
     def cb_save_cur_odom(self, odom_msg):
         global cur_odom
@@ -309,9 +309,10 @@ class GlobalLocalizationNode(Node):
         if self.odom_log_count % 20 == 1:
             try:
                 p = cur_odom.pose.pose.position
-                self.get_logger().info(f"Received Odometry - header.frame_id={cur_odom.header.frame_id}, pose=({p.x:.2f},{p.y:.2f},{p.z:.2f})")
+                # self.get_logger().info(f"Received Odometry - header.frame_id={cur_odom.header.frame_id}, pose=({p.x:.2f},{p.y:.2f},{p.z:.2f})")
             except Exception:
-                self.get_logger().info('Received Odometry (could not parse pose)')
+                pass
+                # self.get_logger().info('Received Odometry (could not parse pose)')
     
     def cb_save_cur_scan(self, pc_msg):
         global cur_scan
@@ -327,7 +328,8 @@ class GlobalLocalizationNode(Node):
         # Throttle scan logging to avoid log spam
         self.scan_log_count += 1
         if self.scan_log_count % 5 == 1:
-            self.get_logger().info(f'Received scan with {len(pc)} points from /cloud_registered')
+            pass
+            # self.get_logger().info(f'Received scan with {len(pc)} points from /cloud_registered')
 
         if len(pc) == 0:
             self.get_logger().warn('Received EMPTY point cloud from /cloud_registered!')
@@ -423,7 +425,7 @@ SCAN_VOXEL_SIZE = 0.1
 FREQ_LOCALIZATION = 0.5
 
 # The threshold of global localization
-LOCALIZATION_TH = 0.5  # Lowered from 0.95 - fitness >0.3 is reasonable for real scans
+LOCALIZATION_TH = 0.95  # Lowered from 0.95 - fitness >0.3 is reasonable for real scans
 
 # FOV(rad), modify this according to your LiDAR type
 FOV = 1.6
