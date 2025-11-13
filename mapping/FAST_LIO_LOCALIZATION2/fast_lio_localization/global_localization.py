@@ -18,6 +18,7 @@ from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
 import tf_transformations
 import ros2_numpy
 from rclpy.duration import Duration
+from sensor_msgs_py import point_cloud2
 
 
 class FastLIOLocalization(Node):
@@ -78,6 +79,10 @@ class FastLIOLocalization(Node):
 
         self.timer_localisation = self.create_timer(1.0 / self.get_parameter("freq_localization").value, self.localisation_timer_callback)
         # self.timer_global_map = self.create_timer(1/ self.get_parameter("freq_global_map").value, self.global_map_callback)
+        
+        # Publish initial T_map_to_odom at origin immediately so transform_fusion can start
+        self.publish_odom(self.T_map_to_odom)
+        self.get_logger().info("Published initial map->odom transform at origin. Waiting for 2D Pose Estimate...")
 
     def global_map_callback(self):
         # self.get_logger().info(np.array(self.global_map.points).shape)
@@ -124,22 +129,40 @@ class FastLIOLocalization(Node):
         trans_inverse[:3, 3] = -np.matmul(trans[:3, :3].T, trans[:3, 3])
         return trans_inverse
 
+
+
     def publish_point_cloud(self, publisher, header, pc):
-        data = dict()
-        data["xyz"] = pc[:, :3]
-        
-        if pc.shape[1] == 4:
-            data["intensity"] = pc[:, 3]
-        # else:
-            # data["rgb"] = np.ones_like(pc)
-        msg = ros2_numpy.msgify(PointCloud2, data)
-        msg.header = header
-        if len(msg.fields) == 4:
-            msg.point_step = 16
+        # Check valid input
+        if pc is None or len(pc.shape) != 2 or pc.shape[0] == 0:
+            return
+
+        # Build fields
+        fields = [
+            point_cloud2.PointField(
+                name='x', offset=0, datatype=point_cloud2.PointField.FLOAT32, count=1),
+            point_cloud2.PointField(
+                name='y', offset=4, datatype=point_cloud2.PointField.FLOAT32, count=1),
+            point_cloud2.PointField(
+                name='z', offset=8, datatype=point_cloud2.PointField.FLOAT32, count=1),
+            point_cloud2.PointField(
+                name='intensity', offset=12, datatype=point_cloud2.PointField.FLOAT32, count=1)
+        ]
+
+        # Ensure intensity exists
+        if pc.shape[1] >= 4:
+            intensity = pc[:, 3].astype(np.float32)
         else:
-            msg.point_step = 12
-            
+            intensity = np.zeros(pc.shape[0], dtype=np.float32)
+
+        # Build Nx4 float32 array
+        cloud = np.zeros((pc.shape[0], 4), dtype=np.float32)
+        cloud[:, 0:3] = pc[:, 0:3]
+        cloud[:, 3] = intensity
+
+        # Convert to ROS2 message
+        msg = point_cloud2.create_cloud(header, fields, cloud)
         publisher.publish(msg)
+
         
     def crop_global_map_in_FOV(self, pose_estimation):
         # FAST-LIO publishes odometry as camera_init -> body
@@ -148,30 +171,28 @@ class FastLIOLocalization(Node):
         
         # pose_estimation is T_map_to_odom (in odom frame, which is the correct orientation)
         if self.use_odom_transform:
-            # We need to get body position in odom frame
-            # TF chain: odom -> camera_init -> body
-            try:
-                # Get static TF: odom -> camera_init (the flip transform)
-                tf_odom_to_camera = self.tf_buffer.lookup_transform(
-                    'camera_init',  # target frame (flipped)
-                    'odom',         # source frame (correct orientation)
-                    rclpy.time.Time(),
-                    timeout=Duration(seconds=0.5)
-                )
-                
-                # Convert TF to transformation matrix
-                T_odom_to_camera_init = self.tf_to_matrix(tf_odom_to_camera.transform)
-                
-                # Compute body position in odom frame
-                # T_odom_to_body = T_odom_to_camera_init * T_camera_init_to_body
-                T_odom_to_body = np.matmul(T_odom_to_camera_init, T_camera_init_to_body)
-                
-                self.get_logger().debug('Using odom->camera_init->body transform chain for FOV cropping')
-                
-            except (tf2_ros.LookupException, tf2_ros.ConnectivityException, 
-                    tf2_ros.ExtrapolationException) as e:
-                self.get_logger().warn(f'TF lookup failed in crop_global_map_in_FOV: {e}. Using camera_init as odom.')
-                T_odom_to_body = T_camera_init_to_body
+            # Compute T_odom_to_camera_init from parameters
+            roll = np.radians(self.get_parameter("odom_roll").value)
+            pitch = np.radians(self.get_parameter("odom_pitch").value)
+            yaw = np.radians(self.get_parameter("odom_yaw").value)
+            
+            # Create rotation matrix (ZYX convention)
+            cr, sr = np.cos(roll), np.sin(roll)
+            cp, sp = np.cos(pitch), np.sin(pitch)
+            cy, sy = np.cos(yaw), np.sin(yaw)
+            
+            T_odom_to_camera_init = np.eye(4)
+            T_odom_to_camera_init[:3, :3] = np.array([
+                [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
+                [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
+                [-sp, cp*sr, cp*cr]
+            ])
+            
+            # Compute body position in odom frame
+            # T_odom_to_body = T_odom_to_camera_init * T_camera_init_to_body
+            T_odom_to_body = np.matmul(T_odom_to_camera_init, T_camera_init_to_body)
+            
+            self.get_logger().debug('Using odom->camera_init->body transform chain for FOV cropping')
         else:
             # No odom transform: treat camera_init as odom
             T_odom_to_body = T_camera_init_to_body
@@ -209,15 +230,35 @@ class FastLIOLocalization(Node):
         scan_tobe_mapped = copy.copy(self.cur_scan)
         global_map_in_FOV = self.crop_global_map_in_FOV(pose_estimation)
         
+        self.get_logger().info(f"Scan points: {len(scan_tobe_mapped.points)}, Map FOV points: {len(global_map_in_FOV.points)}")
+        
+        if len(scan_tobe_mapped.points) == 0:
+            self.get_logger().error("Current scan is empty! Cannot perform localization.")
+            return
+        
+        if len(global_map_in_FOV.points) == 0:
+            self.get_logger().error("Map FOV is empty! Check initial pose or FOV parameters.")
+            return
+        
         transformation, _ = self.registration_at_scale(scan_tobe_mapped, global_map_in_FOV, initial=pose_estimation, scale=5)
         
         transformation, fitness = self.registration_at_scale(scan_tobe_mapped, global_map_in_FOV, initial=pose_estimation, scale=1)
         
+        # Log initial vs refined transform
+        delta_x = transformation[0, 3] - pose_estimation[0, 3]
+        delta_y = transformation[1, 3] - pose_estimation[1, 3]
+        delta_z = transformation[2, 3] - pose_estimation[2, 3]
+        delta_dist = np.sqrt(delta_x**2 + delta_y**2 + delta_z**2)
+        
+        self.get_logger().info(f"ICP fitness: {fitness:.4f} (threshold: {self.get_parameter('localization_threshold').value:.2f}), "
+                              f"correction: {delta_dist:.3f}m [x:{delta_x:.3f}, y:{delta_y:.3f}, z:{delta_z:.3f}]")
+        
         if fitness > self.get_parameter("localization_threshold").value:
             self.T_map_to_odom = transformation
             self.publish_odom(transformation)
+            self.get_logger().info("✓ Localization updated")
         else:
-            self.get_logger().warn(f"Fitness score {fitness} less than localization threshold {self.get_parameter('localization_threshold').value}")
+            self.get_logger().warn(f"✗ Localization rejected: low fitness score")
 
     def voxel_down_sample(self, pcd, voxel_size):
         # print(pcd)
@@ -235,44 +276,56 @@ class FastLIOLocalization(Node):
         self.cur_odom = msg
         
     def cb_save_cur_scan(self, msg):
-        # Use TF to transform point cloud from camera_init to odom
+        # Transform point cloud from camera_init to odom
         if self.use_odom_transform:
-            try:
-                # Lookup transform from camera_init to odom
-                transform = self.tf_buffer.lookup_transform(
-                    'odom',                   # target frame
-                    msg.header.frame_id,      # source frame (camera_init)
-                    rclpy.time.Time(),        # get latest transform
-                    timeout=Duration(seconds=1.0)
-                )
-                
-                # Transform the entire PointCloud2 message using TF
-                msg_transformed = do_transform_cloud(msg, transform)
-                pc = self.msg_to_array(msg_transformed)
-                
-                self.get_logger().info(f"[TF TRANSFORM] ✓ Transformed point cloud from '{msg.header.frame_id}' to 'odom' using TF", 
-                                    throttle_duration_sec=5.0)
-                
-                # Create corrected header for odom frame
-                header_odom = Header()
-                header_odom.stamp = msg.header.stamp
-                header_odom.frame_id = "odom"  # ✓ Correct frame
-                
-            except (tf2_ros.LookupException, tf2_ros.ConnectivityException, 
-                    tf2_ros.ExtrapolationException) as e:
-                self.get_logger().warn(f'TF lookup failed: {e}. Using original frame.')
-                pc = self.msg_to_array(msg)
-                header_odom = msg.header  # Fallback to original
+            # Get the raw point cloud data
+            pc_camera_init = self.msg_to_array(msg)
+            
+            # Compute odom->camera_init transform from parameters
+            roll = np.radians(self.get_parameter("odom_roll").value)
+            pitch = np.radians(self.get_parameter("odom_pitch").value)
+            yaw = np.radians(self.get_parameter("odom_yaw").value)
+            
+            # Create rotation matrix (ZYX convention)
+            cr, sr = np.cos(roll), np.sin(roll)
+            cp, sp = np.cos(pitch), np.sin(pitch)
+            cy, sy = np.cos(yaw), np.sin(yaw)
+            
+            R_odom_to_camera = np.array([
+                [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
+                [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
+                [-sp, cp*sr, cp*cr]
+            ])
+            
+            # We need camera_init->odom (inverse of odom->camera_init)
+            R_camera_to_odom = R_odom_to_camera.T
+            
+            # Transform point cloud: apply rotation to each point
+            pc_odom = np.dot(pc_camera_init[:, :3], R_camera_to_odom.T)
+            
+            # Preserve intensity if it exists
+            if pc_camera_init.shape[1] > 3:
+                pc = np.column_stack([pc_odom, pc_camera_init[:, 3:]])
+            else:
+                pc = pc_odom
+            
+            self.get_logger().info(f"[TRANSFORM] ✓ Transformed point cloud from '{msg.header.frame_id}' to 'odom'", 
+                                throttle_duration_sec=5.0)
+            
+            # Create corrected header for odom frame
+            header_odom = Header()
+            header_odom.stamp = msg.header.stamp
+            header_odom.frame_id = "odom"
         else:
             pc = self.msg_to_array(msg)
             header_odom = msg.header
         
-        # Create point cloud (already in odom frame if transform was successful)
+        # Create point cloud (in odom frame if transform was applied)
         self.cur_scan = o3d.geometry.PointCloud()
-        self.cur_scan.points = o3d.utility.Vector3dVector(pc)
+        self.cur_scan.points = o3d.utility.Vector3dVector(pc[:, :3])
         
         # Publish for visualization with CORRECT header
-        self.publish_point_cloud(self.pub_pc_in_map, header_odom, pc)  # ✓ Use odom header
+        self.publish_point_cloud(self.pub_pc_in_map, header_odom, pc)
         
     def initialize_global_map(self): #, pc_msg):
         # self.global_map = o3d.geometry.PointCloud()
@@ -283,12 +336,61 @@ class FastLIOLocalization(Node):
         self.get_logger().info("Global map received.")
 
     def cb_initialize_pose(self, msg):
-        initial_pose = self.pose_to_mat(msg.pose.pose)
-        self.initialized = True
-        self.get_logger().info("Initial pose received.")
+        # Initial pose from RViz is the robot's position in map frame
+        T_map_to_body = self.pose_to_mat(msg.pose.pose)
         
-        if self.cur_scan is not None:
-            self.global_localization(initial_pose)
+        # We need to compute T_map_to_odom
+        # T_map_to_odom = T_map_to_body * T_body_to_odom
+        # where T_body_to_odom = inverse(T_odom_to_body)
+        
+        if self.cur_odom is not None and self.cur_scan is not None:
+            # Get current odometry: camera_init -> body
+            T_camera_init_to_body = self.pose_to_mat(self.cur_odom.pose.pose)
+            
+            if self.use_odom_transform:
+                # Compute T_odom_to_camera_init from parameters (same as in transform_fusion.py)
+                roll = np.radians(self.get_parameter("odom_roll").value)
+                pitch = np.radians(self.get_parameter("odom_pitch").value)
+                yaw = np.radians(self.get_parameter("odom_yaw").value)
+                
+                # Create rotation matrix (ZYX convention)
+                cr, sr = np.cos(roll), np.sin(roll)
+                cp, sp = np.cos(pitch), np.sin(pitch)
+                cy, sy = np.cos(yaw), np.sin(yaw)
+                
+                T_odom_to_camera_init = np.eye(4)
+                T_odom_to_camera_init[:3, :3] = np.array([
+                    [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
+                    [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
+                    [-sp, cp*sr, cp*cr]
+                ])
+                
+                # Compute T_odom_to_body = T_odom_to_camera_init * T_camera_init_to_body
+                T_odom_to_body = np.matmul(T_odom_to_camera_init, T_camera_init_to_body)
+                
+                self.get_logger().info("Computed odom->camera_init->body transform chain")
+            else:
+                # No odom transform: camera_init acts as odom
+                T_odom_to_body = T_camera_init_to_body
+            
+            # Compute T_map_to_odom = T_map_to_body * inverse(T_odom_to_body)
+            T_body_to_odom = self.inverse_se3(T_odom_to_body)
+            initial_T_map_to_odom = np.matmul(T_map_to_body, T_body_to_odom)
+            
+            self.get_logger().info(f"Initial pose received: x={T_map_to_body[0, 3]:.2f}, "
+                                  f"y={T_map_to_body[1, 3]:.2f}, "
+                                  f"z={T_map_to_body[2, 3]:.2f}")
+            
+            # Set initial T_map_to_odom and publish it immediately
+            self.T_map_to_odom = initial_T_map_to_odom
+            self.publish_odom(initial_T_map_to_odom)
+            
+            # Run scan matching to refine the estimate
+            self.global_localization(initial_T_map_to_odom)
+            self.initialized = True
+        else:
+            self.get_logger().warn("Cannot initialize: waiting for odometry and scan data")
+            self.initialized = False
             
     def publish_odom(self, transform):
         odom_msg = Odometry()

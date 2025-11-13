@@ -91,7 +91,17 @@ def generate_launch_description():
         ]
     )
 
-    rviz_node = Node(package="rviz2", executable="rviz2", arguments=["-d", rviz_cfg], condition=IfCondition(rviz_use))
+    rviz_node = Node(
+        package="rviz2",
+        executable="rviz2",
+        arguments=[
+            "-d", rviz_cfg,
+            "--ros-args",
+            "--log-level", "WARN"
+        ],
+        condition=IfCondition(rviz_use),
+    )
+
 
     ld = LaunchDescription()
     ld.add_action(declare_use_sim_time_cmd)

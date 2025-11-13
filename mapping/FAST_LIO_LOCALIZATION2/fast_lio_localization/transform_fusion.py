@@ -79,9 +79,11 @@ class TransformFusion(Node):
         if self.cur_odom_to_baselink is None:
             return
 
+        # Use received T_map_to_odom, or default to identity if not yet received
         if self.cur_map_to_odom is not None:
             T_map_to_odom = self.pose_to_mat(self.cur_map_to_odom.pose.pose)
         else:
+            # Will be at origin until 2D Pose Estimate is clicked
             T_map_to_odom = np.eye(4)
 
         # Publish TF chain depending on odom transform
