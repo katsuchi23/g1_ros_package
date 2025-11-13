@@ -41,20 +41,20 @@ class FastLIOLocalization(Node):
                 ("fov_far", 300),
                 ("pcd_map_topic", "/map"),
                 ("pcd_map_path", ""),
-                ("use_base_link_transform", True),
-                ("base_link_roll", 180.0),
-                ("base_link_pitch", -7.5),
-                ("base_link_yaw", 0.0),
+                ("use_odom_transform", True),
+                ("odom_roll", 180.0),
+                ("odom_pitch", -7.5),
+                ("odom_yaw", 0.0),
             ],
         )
         
-        # Check if base_link transformation is enabled
-        self.use_base_link_transform = self.get_parameter("use_base_link_transform").value
-        if self.use_base_link_transform:
-            self.get_logger().info(f"Base link transformation enabled: roll={self.get_parameter('base_link_roll').value}°, "
-                                   f"pitch={self.get_parameter('base_link_pitch').value}°, "
-                                   f"yaw={self.get_parameter('base_link_yaw').value}°")
-            self.get_logger().info("Will use TF tree to transform point clouds from camera_init to base_link")
+        # Check if odom transformation is enabled
+        self.use_odom_transform = self.get_parameter("use_odom_transform").value
+        if self.use_odom_transform:
+            self.get_logger().info(f"Odom transformation enabled: roll={self.get_parameter('odom_roll').value}°, "
+                                   f"pitch={self.get_parameter('odom_pitch').value}°, "
+                                   f"yaw={self.get_parameter('odom_yaw').value}°")
+            self.get_logger().info("Will use TF tree to transform point clouds from camera_init to odom")
 
         # Initialize TF buffer and listener (must be before subscriptions)
         self.tf_buffer = tf2_ros.Buffer()
@@ -142,51 +142,59 @@ class FastLIOLocalization(Node):
         publisher.publish(msg)
         
     def crop_global_map_in_FOV(self, pose_estimation):
-        # FAST-LIO publishes odom as camera_init -> body
-        T_odom_to_camera_init = self.pose_to_mat(self.cur_odom.pose.pose)
+        # FAST-LIO publishes odometry as camera_init -> body
+        # cur_odom contains the transform from camera_init to body
+        T_camera_init_to_body = self.pose_to_mat(self.cur_odom.pose.pose)
         
-        # If using base_link transform, we need: map -> base_link -> camera_init -> body
-        # pose_estimation is T_map_to_odom (where odom frame is base_link or camera_init depending on transform)
-        if self.use_base_link_transform:
-            # Get TF: camera_init -> base_link
+        # pose_estimation is T_map_to_odom (in odom frame, which is the correct orientation)
+        if self.use_odom_transform:
+            # We need to get body position in odom frame
+            # TF chain: odom -> camera_init -> body
             try:
-                tf_cam_to_base = self.tf_buffer.lookup_transform(
-                    'base_link',
-                    'camera_init',
+                # Get static TF: odom -> camera_init (the flip transform)
+                tf_odom_to_camera = self.tf_buffer.lookup_transform(
+                    'camera_init',  # target frame (flipped)
+                    'odom',         # source frame (correct orientation)
                     rclpy.time.Time(),
                     timeout=Duration(seconds=0.5)
                 )
                 
                 # Convert TF to transformation matrix
-                T_camera_init_to_base_link = self.tf_to_matrix(tf_cam_to_base.transform)
+                T_odom_to_camera_init = self.tf_to_matrix(tf_odom_to_camera.transform)
                 
-                # Convert odom (camera_init->body) to base_link->body
-                T_odom_to_base_link = np.matmul(T_camera_init_to_base_link, T_odom_to_camera_init)
+                # Compute body position in odom frame
+                # T_odom_to_body = T_odom_to_camera_init * T_camera_init_to_body
+                T_odom_to_body = np.matmul(T_odom_to_camera_init, T_camera_init_to_body)
+                
+                self.get_logger().debug('Using odom->camera_init->body transform chain for FOV cropping')
                 
             except (tf2_ros.LookupException, tf2_ros.ConnectivityException, 
                     tf2_ros.ExtrapolationException) as e:
-                self.get_logger().warn(f'TF lookup failed in crop_global_map_in_FOV: {e}. Using camera_init frame.')
-                T_odom_to_base_link = T_odom_to_camera_init
+                self.get_logger().warn(f'TF lookup failed in crop_global_map_in_FOV: {e}. Using camera_init as odom.')
+                T_odom_to_body = T_camera_init_to_body
         else:
-            T_odom_to_base_link = T_odom_to_camera_init
+            # No odom transform: treat camera_init as odom
+            T_odom_to_body = T_camera_init_to_body
             
-        T_map_to_base_link = np.matmul(pose_estimation, T_odom_to_base_link)
-        T_base_link_to_map = self.inverse_se3(T_map_to_base_link)
+        # Now compute body position in map frame
+        # T_map_to_body = T_map_to_odom * T_odom_to_body
+        T_map_to_body = np.matmul(pose_estimation, T_odom_to_body)
+        T_body_to_map = self.inverse_se3(T_map_to_body)
 
         global_map_in_map = np.array(self.global_map.points)
         global_map_in_map = np.column_stack([global_map_in_map, np.ones(len(global_map_in_map))])
-        global_map_in_base_link = np.matmul(T_base_link_to_map, global_map_in_map.T).T
+        global_map_in_body = np.matmul(T_body_to_map, global_map_in_map.T).T
 
         if self.get_parameter("fov").value > 3.14:
             indices = np.where(
-                (global_map_in_base_link[:, 0] < self.get_parameter("fov_far").value)
-                & (np.abs(np.arctan2(global_map_in_base_link[:, 1], global_map_in_base_link[:, 0])) < self.get_parameter("fov").value / 2.0)
+                (global_map_in_body[:, 0] < self.get_parameter("fov_far").value)
+                & (np.abs(np.arctan2(global_map_in_body[:, 1], global_map_in_body[:, 0])) < self.get_parameter("fov").value / 2.0)
             )
         else:
             indices = np.where(
-                (global_map_in_base_link[:, 0] > 0)
-                & (global_map_in_base_link[:, 0] < self.get_parameter("fov_far").value)
-                & (np.abs(np.arctan2(global_map_in_base_link[:, 1], global_map_in_base_link[:, 0])) < self.get_parameter("fov").value / 2.0)
+                (global_map_in_body[:, 0] > 0)
+                & (global_map_in_body[:, 0] < self.get_parameter("fov_far").value)
+                & (np.abs(np.arctan2(global_map_in_body[:, 1], global_map_in_body[:, 0])) < self.get_parameter("fov").value / 2.0)
             )
         global_map_in_FOV = o3d.geometry.PointCloud()
         global_map_in_FOV.points = o3d.utility.Vector3dVector(np.squeeze(global_map_in_map[indices, :3]))
@@ -227,12 +235,12 @@ class FastLIOLocalization(Node):
         self.cur_odom = msg
         
     def cb_save_cur_scan(self, msg):
-        # Use TF to transform point cloud from camera_init to base_link
-        if self.use_base_link_transform:
+        # Use TF to transform point cloud from camera_init to odom
+        if self.use_odom_transform:
             try:
-                # Lookup transform from camera_init to base_link
+                # Lookup transform from camera_init to odom
                 transform = self.tf_buffer.lookup_transform(
-                    'base_link',              # target frame
+                    'odom',                   # target frame
                     msg.header.frame_id,      # source frame (camera_init)
                     rclpy.time.Time(),        # get latest transform
                     timeout=Duration(seconds=1.0)
@@ -242,22 +250,29 @@ class FastLIOLocalization(Node):
                 msg_transformed = do_transform_cloud(msg, transform)
                 pc = self.msg_to_array(msg_transformed)
                 
-                self.get_logger().info(f"[TF TRANSFORM] ✓ Transformed point cloud from '{msg.header.frame_id}' to 'base_link' using TF", 
-                                      throttle_duration_sec=5.0)
+                self.get_logger().info(f"[TF TRANSFORM] ✓ Transformed point cloud from '{msg.header.frame_id}' to 'odom' using TF", 
+                                    throttle_duration_sec=5.0)
+                
+                # Create corrected header for odom frame
+                header_odom = Header()
+                header_odom.stamp = msg.header.stamp
+                header_odom.frame_id = "odom"  # ✓ Correct frame
                 
             except (tf2_ros.LookupException, tf2_ros.ConnectivityException, 
                     tf2_ros.ExtrapolationException) as e:
                 self.get_logger().warn(f'TF lookup failed: {e}. Using original frame.')
                 pc = self.msg_to_array(msg)
+                header_odom = msg.header  # Fallback to original
         else:
             pc = self.msg_to_array(msg)
+            header_odom = msg.header
         
-        # Create point cloud (already in base_link frame if transform was successful)
+        # Create point cloud (already in odom frame if transform was successful)
         self.cur_scan = o3d.geometry.PointCloud()
         self.cur_scan.points = o3d.utility.Vector3dVector(pc)
         
-        # Publish for visualization
-        self.publish_point_cloud(self.pub_pc_in_map, msg.header, pc)
+        # Publish for visualization with CORRECT header
+        self.publish_point_cloud(self.pub_pc_in_map, header_odom, pc)  # ✓ Use odom header
         
     def initialize_global_map(self): #, pc_msg):
         # self.global_map = o3d.geometry.PointCloud()

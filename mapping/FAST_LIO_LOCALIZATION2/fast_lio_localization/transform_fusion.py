@@ -25,41 +25,41 @@ class TransformFusion(Node):
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
         self.pub_localization = self.create_publisher(Odometry, "/localization", 1)
 
-        # Declare parameters for base_link transformation
+        # Declare parameters for odom transformation
         self.declare_parameters(
             namespace="",
             parameters=[
-                ("use_base_link_transform", True),
-                ("base_link_roll", 180.0),
-                ("base_link_pitch", -7.5),
-                ("base_link_yaw", 0.0),
+                ("use_odom_transform", True),
+                ("odom_roll", 180.0),
+                ("odom_pitch", -7.5),
+                ("odom_yaw", 0.0),
             ],
         )
         
-        # Compute base_link transformation matrix
-        self.use_base_link_transform = self.get_parameter("use_base_link_transform").value
-        if self.use_base_link_transform:
-            roll = np.radians(self.get_parameter("base_link_roll").value)
-            pitch = np.radians(self.get_parameter("base_link_pitch").value)
-            yaw = np.radians(self.get_parameter("base_link_yaw").value)
+        # Compute odom -> camera_init transformation matrix
+        self.use_odom_transform = self.get_parameter("use_odom_transform").value
+        if self.use_odom_transform:
+            roll = np.radians(self.get_parameter("odom_roll").value)
+            pitch = np.radians(self.get_parameter("odom_pitch").value)
+            yaw = np.radians(self.get_parameter("odom_yaw").value)
             
             # Compute rotation matrix from RPY (ZYX convention)
             cr, sr = np.cos(roll), np.sin(roll)
             cp, sp = np.cos(pitch), np.sin(pitch)
             cy, sy = np.cos(yaw), np.sin(yaw)
             
-            self.T_base_link_to_camera_init = np.eye(4)
-            self.T_base_link_to_camera_init[:3, :3] = np.array([
+            self.T_odom_to_camera_init = np.eye(4)
+            self.T_odom_to_camera_init[:3, :3] = np.array([
                 [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
                 [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
                 [-sp, cp*sr, cp*cr]
             ])
             
-            self.get_logger().info(f"Base link transformation enabled: roll={self.get_parameter('base_link_roll').value}°, "
-                                   f"pitch={self.get_parameter('base_link_pitch').value}°, "
-                                   f"yaw={self.get_parameter('base_link_yaw').value}°")
+            self.get_logger().info(f"Odom transformation enabled: roll={self.get_parameter('odom_roll').value}°, "
+                                   f"pitch={self.get_parameter('odom_pitch').value}°, "
+                                   f"yaw={self.get_parameter('odom_yaw').value}°")
         else:
-            self.T_base_link_to_camera_init = np.eye(4)
+            self.T_odom_to_camera_init = np.eye(4)
 
         self.create_subscription(Odometry, "/Odometry", self.cb_save_cur_odom, 1)
         self.create_subscription(Odometry, "/map_to_odom", self.cb_save_map_to_odom, 1)
@@ -84,35 +84,35 @@ class TransformFusion(Node):
         else:
             T_map_to_odom = np.eye(4)
 
-        # Publish TF chain depending on base_link transform
-        if self.use_base_link_transform:
-            # Publish: map -> base_link
-            transform_msg_base_link = Transform()
-            transform_msg_base_link.translation.x = T_map_to_odom[0, 3]
-            transform_msg_base_link.translation.y = T_map_to_odom[1, 3]
-            transform_msg_base_link.translation.z = T_map_to_odom[2, 3]
+        # Publish TF chain depending on odom transform
+        if self.use_odom_transform:
+            # Publish: map -> odom
+            transform_msg_odom = Transform()
+            transform_msg_odom.translation.x = T_map_to_odom[0, 3]
+            transform_msg_odom.translation.y = T_map_to_odom[1, 3]
+            transform_msg_odom.translation.z = T_map_to_odom[2, 3]
             
             quat = tf_transformations.quaternion_from_matrix(T_map_to_odom)
-            transform_msg_base_link.rotation.x = quat[0]
-            transform_msg_base_link.rotation.y = quat[1]
-            transform_msg_base_link.rotation.z = quat[2]
-            transform_msg_base_link.rotation.w = quat[3]
+            transform_msg_odom.rotation.x = quat[0]
+            transform_msg_odom.rotation.y = quat[1]
+            transform_msg_odom.rotation.z = quat[2]
+            transform_msg_odom.rotation.w = quat[3]
             
-            transform_stamped_base_link = tf2_ros.TransformStamped(
+            transform_stamped_odom = tf2_ros.TransformStamped(
                 header = self.cur_odom_to_baselink.header,
-                child_frame_id = "base_link",
-                transform = transform_msg_base_link
+                child_frame_id = "odom",
+                transform = transform_msg_odom
             )
-            transform_stamped_base_link.header.frame_id = "map"
-            self.tf_broadcaster.sendTransform(transform_stamped_base_link)
+            transform_stamped_odom.header.frame_id = "map"
+            self.tf_broadcaster.sendTransform(transform_stamped_odom)
             
-            # Publish: base_link -> camera_init (static transform)
+            # Publish: odom -> camera_init (static transform)
             transform_msg_camera = Transform()
-            transform_msg_camera.translation.x = self.T_base_link_to_camera_init[0, 3]
-            transform_msg_camera.translation.y = self.T_base_link_to_camera_init[1, 3]
-            transform_msg_camera.translation.z = self.T_base_link_to_camera_init[2, 3]
+            transform_msg_camera.translation.x = self.T_odom_to_camera_init[0, 3]
+            transform_msg_camera.translation.y = self.T_odom_to_camera_init[1, 3]
+            transform_msg_camera.translation.z = self.T_odom_to_camera_init[2, 3]
             
-            quat_camera = tf_transformations.quaternion_from_matrix(self.T_base_link_to_camera_init)
+            quat_camera = tf_transformations.quaternion_from_matrix(self.T_odom_to_camera_init)
             transform_msg_camera.rotation.x = quat_camera[0]
             transform_msg_camera.rotation.y = quat_camera[1]
             transform_msg_camera.rotation.z = quat_camera[2]
@@ -123,7 +123,7 @@ class TransformFusion(Node):
                 child_frame_id = "camera_init",
                 transform = transform_msg_camera
             )
-            transform_stamped_camera.header.frame_id = "base_link"
+            transform_stamped_camera.header.frame_id = "odom"
             self.tf_broadcaster.sendTransform(transform_stamped_camera)
         else:
             # Original behavior: map -> camera_init
@@ -151,10 +151,10 @@ class TransformFusion(Node):
             # FAST-LIO publishes camera_init -> body
             T_camera_init_to_body = self.pose_to_mat(cur_odom.pose.pose)
             
-            if self.use_base_link_transform:
-                # Compute: map -> base_link -> camera_init -> body
-                T_base_link_to_body = np.matmul(self.T_base_link_to_camera_init, T_camera_init_to_body)
-                T_map_to_body = np.matmul(T_map_to_odom, T_base_link_to_body)
+            if self.use_odom_transform:
+                # Compute: map -> odom -> camera_init -> body
+                T_odom_to_body = np.matmul(self.T_odom_to_camera_init, T_camera_init_to_body)
+                T_map_to_body = np.matmul(T_map_to_odom, T_odom_to_body)
             else:
                 # Original: map -> camera_init -> body
                 T_map_to_body = np.matmul(T_map_to_odom, T_camera_init_to_body)
