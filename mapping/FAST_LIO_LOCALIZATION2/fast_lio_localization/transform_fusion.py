@@ -29,19 +29,19 @@ class TransformFusion(Node):
         self.declare_parameters(
             namespace="",
             parameters=[
-                ("use_odom_transform", True),
-                ("odom_roll", 180.0),
-                ("odom_pitch", -7.5),
-                ("odom_yaw", 0.0),
+                ("publish.use_odom_transform", True),
+                ("publish.odom_roll", 180.0),
+                ("publish.odom_pitch", -7.5),
+                ("publish.odom_yaw", 0.0),
             ],
         )
         
         # Compute odom -> camera_init transformation matrix
-        self.use_odom_transform = self.get_parameter("use_odom_transform").value
+        self.use_odom_transform = self.get_parameter("publish.use_odom_transform").value
         if self.use_odom_transform:
-            roll = np.radians(self.get_parameter("odom_roll").value)
-            pitch = np.radians(self.get_parameter("odom_pitch").value)
-            yaw = np.radians(self.get_parameter("odom_yaw").value)
+            roll = np.radians(self.get_parameter("publish.odom_roll").value)
+            pitch = np.radians(self.get_parameter("publish.odom_pitch").value)
+            yaw = np.radians(self.get_parameter("publish.odom_yaw").value)
             
             # Compute rotation matrix from RPY (ZYX convention)
             cr, sr = np.cos(roll), np.sin(roll)
@@ -55,9 +55,9 @@ class TransformFusion(Node):
                 [-sp, cp*sr, cp*cr]
             ])
             
-            self.get_logger().info(f"Odom transformation enabled: roll={self.get_parameter('odom_roll').value}°, "
-                                   f"pitch={self.get_parameter('odom_pitch').value}°, "
-                                   f"yaw={self.get_parameter('odom_yaw').value}°")
+            self.get_logger().info(f"Odom transformation enabled: roll={self.get_parameter('publish.odom_roll').value}°, "
+                                   f"pitch={self.get_parameter('publish.odom_pitch').value}°, "
+                                   f"yaw={self.get_parameter('publish.odom_yaw').value}°")
         else:
             self.T_odom_to_camera_init = np.eye(4)
 
