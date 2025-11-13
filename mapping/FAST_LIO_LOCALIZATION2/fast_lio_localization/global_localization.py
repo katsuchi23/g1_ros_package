@@ -276,56 +276,20 @@ class FastLIOLocalization(Node):
         self.cur_odom = msg
         
     def cb_save_cur_scan(self, msg):
-        # Transform point cloud from camera_init to odom
-        if self.use_odom_transform:
-            # Get the raw point cloud data
-            pc_camera_init = self.msg_to_array(msg)
-            
-            # Compute odom->camera_init transform from parameters
-            roll = np.radians(self.get_parameter("odom_roll").value)
-            pitch = np.radians(self.get_parameter("odom_pitch").value)
-            yaw = np.radians(self.get_parameter("odom_yaw").value)
-            
-            # Create rotation matrix (ZYX convention)
-            cr, sr = np.cos(roll), np.sin(roll)
-            cp, sp = np.cos(pitch), np.sin(pitch)
-            cy, sy = np.cos(yaw), np.sin(yaw)
-            
-            R_odom_to_camera = np.array([
-                [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
-                [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
-                [-sp, cp*sr, cp*cr]
-            ])
-            
-            # We need camera_init->odom (inverse of odom->camera_init)
-            R_camera_to_odom = R_odom_to_camera.T
-            
-            # Transform point cloud: apply rotation to each point
-            pc_odom = np.dot(pc_camera_init[:, :3], R_camera_to_odom.T)
-            
-            # Preserve intensity if it exists
-            if pc_camera_init.shape[1] > 3:
-                pc = np.column_stack([pc_odom, pc_camera_init[:, 3:]])
-            else:
-                pc = pc_odom
-            
-            self.get_logger().info(f"[TRANSFORM] ✓ Transformed point cloud from '{msg.header.frame_id}' to 'odom'", 
-                                throttle_duration_sec=5.0)
-            
-            # Create corrected header for odom frame
-            header_odom = Header()
-            header_odom.stamp = msg.header.stamp
-            header_odom.frame_id = "odom"
-        else:
-            pc = self.msg_to_array(msg)
-            header_odom = msg.header
-        
-        # Create point cloud (in odom frame if transform was applied)
+        # Do NOT rotate the point cloud manually.
+        # Keep the scan in the original camera_init frame.
+        pc = self.msg_to_array(msg)
+
+        # Use the same header, including frame_id = 'camera_init'
+        header = msg.header
+
+        # Save the point cloud as-is (in camera_init frame)
         self.cur_scan = o3d.geometry.PointCloud()
         self.cur_scan.points = o3d.utility.Vector3dVector(pc[:, :3])
-        
-        # Publish for visualization with CORRECT header
-        self.publish_point_cloud(self.pub_pc_in_map, header_odom, pc)
+
+        # Publish for visualization (still in camera_init)
+        self.publish_point_cloud(self.pub_pc_in_map, header, pc)
+
         
     def initialize_global_map(self): #, pc_msg):
         # self.global_map = o3d.geometry.PointCloud()
