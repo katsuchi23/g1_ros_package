@@ -8,7 +8,6 @@
         cube_side_length: 1000.0
         runtime_pos_log_enable: false
         map_file_path: "./test.pcd"
-        freq_pub_localization: 50.0  # Publishing frequency (Hz) for localization messages
 
         common:
             lid_topic:  "/velodyne_points"
@@ -42,10 +41,6 @@
             scan_publish_en:  true       # false: close all the point cloud output
             dense_publish_en: true       # false: low down the points number in a global-frame point clouds scan.
             scan_bodyframe_pub_en: true  # true: output the point cloud scans in IMU-body-frame
-            use_odom_transform: false    # true: transform scan to odom frame before matching
-            odom_roll: 180.0             # Roll angle (degrees) from camera_init to odom
-            odom_pitch: -7.5             # Pitch angle (degrees) from camera_init to odom
-            odom_yaw: 0.0                # Yaw angle (degrees) from camera_init to odom
 
         pcd_save:
             pcd_save_en: true
