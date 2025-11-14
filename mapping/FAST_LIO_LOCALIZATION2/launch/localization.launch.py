@@ -113,7 +113,7 @@ def generate_launch_description():
     ld.add_action(declare_pcd_map_topic)
 
     ld.add_action(fast_lio_node)
-    ld.add_action(rviz_node)
+    # ld.add_action(rviz_node)
     ld.add_action(global_localization_node)
     ld.add_action(transform_fusion_node)
     ld.add_action(pcd_publisher_node)
