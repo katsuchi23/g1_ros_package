@@ -230,7 +230,7 @@ class FastLIOLocalization(Node):
         scan_tobe_mapped = copy.copy(self.cur_scan)
         global_map_in_FOV = self.crop_global_map_in_FOV(pose_estimation)
         
-        self.get_logger().info(f"Scan points: {len(scan_tobe_mapped.points)}, Map FOV points: {len(global_map_in_FOV.points)}")
+        # self.get_logger().info(f"Scan points: {len(scan_tobe_mapped.points)}, Map FOV points: {len(global_map_in_FOV.points)}")
         
         if len(scan_tobe_mapped.points) == 0:
             self.get_logger().error("Current scan is empty! Cannot perform localization.")
@@ -256,7 +256,7 @@ class FastLIOLocalization(Node):
         if fitness > self.get_parameter("localization_threshold").value:
             self.T_map_to_odom = transformation
             self.publish_odom(transformation)
-            self.get_logger().info("✓ Localization updated")
+            # self.get_logger().info("✓ Localization updated")
         else:
             self.get_logger().warn(f"✗ Localization rejected: low fitness score")
 
@@ -348,7 +348,7 @@ class FastLIOLocalization(Node):
             # Set initial T_map_to_odom and publish it immediately
             self.T_map_to_odom = initial_T_map_to_odom
             self.publish_odom(initial_T_map_to_odom)
-            
+ 
             # Run scan matching to refine the estimate
             self.global_localization(initial_T_map_to_odom)
             self.initialized = True
@@ -357,16 +357,30 @@ class FastLIOLocalization(Node):
             self.initialized = False
             
     def publish_odom(self, transform):
+
+        # Extract translation
+        x = transform[0, 3]
+        y = transform[1, 3]
+
+        # Extract yaw only (ignore roll & pitch)
+        roll, pitch, yaw = tf_transformations.euler_from_matrix(transform)
+
+        # Build clean 2D rotation
+        R_clean = tf_transformations.euler_matrix(0.0, 0.0, yaw)
+
+        qx, qy, qz, qw = tf_transformations.quaternion_from_matrix(R_clean)
+
         odom_msg = Odometry()
-        xyz = transform[:3, 3]
-        quat = tf_transformations.quaternion_from_matrix(transform)
         odom_msg.pose.pose = Pose(
-            position = Point(x = xyz[0], y = xyz[1], z = xyz[2]), 
-            orientation = Quaternion(x = quat[0], y = quat[1], z = quat[2], w = quat[3])
+            position = Point(x=x, y=y, z=0.0),
+            orientation = Quaternion(x=qx, y=qy, z=qz, w=qw)
         )
+
         odom_msg.header.stamp = self.get_clock().now().to_msg()
         odom_msg.header.frame_id = "map"
+
         self.pub_map_to_odom.publish(odom_msg)
+
 
     def localisation_timer_callback(self):
         if not self.initialized:
