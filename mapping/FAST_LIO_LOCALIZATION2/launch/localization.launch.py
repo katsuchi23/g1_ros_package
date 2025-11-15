@@ -104,6 +104,13 @@ def generate_launch_description():
         condition=IfCondition(rviz_use),
     )
 
+    odom_converter_node = Node(
+        package="fast_lio_localization",
+        executable="odom_topic.py",
+        name="fastlio_odom_converter",
+        output="screen",
+    )
+
     # Read the YAML config file to get odom orientation values
     config_file_path = os.path.join(default_config_path, "mid360.yaml")
     with open(config_file_path, 'r') as file:
@@ -162,5 +169,7 @@ def generate_launch_description():
     ld.add_action(transform_fusion_node)
     ld.add_action(pcd_publisher_node)
     ld.add_action(body_to_base_link_tf)
+    ld.add_action(odom_converter_node)
+
 
     return ld

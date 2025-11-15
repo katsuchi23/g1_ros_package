@@ -56,11 +56,13 @@ def generate_launch_description():
     # Rviz Node
     rviz_config_file_path = os.path.join(nav2_bringup_dir, 'rviz', 'view.rviz')
     rviz_node = Node(
-        package='rviz2',
-        executable='rviz2',
-        name='rviz2',
-        output='screen',
-        arguments=['-d', rviz_config_file_path]
+        package="rviz2",
+        executable="rviz2",
+        arguments=[
+            "-d", rviz_config_file_path,
+            "--ros-args",
+            "--log-level", "WARN"
+        ]
     )
 
     ld = LaunchDescription()

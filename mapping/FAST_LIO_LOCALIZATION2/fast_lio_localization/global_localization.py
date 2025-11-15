@@ -220,7 +220,8 @@ class FastLIOLocalization(Node):
         global_map_in_FOV = o3d.geometry.PointCloud()
         global_map_in_FOV.points = o3d.utility.Vector3dVector(np.squeeze(global_map_in_map[indices, :3]))
 
-        header = self.cur_odom.header
+        header = Header()
+        header.stamp = self.get_clock().now().to_msg()   # ❗ use ROS time
         header.frame_id = "map"
         self.publish_point_cloud(self.pub_submap, header, np.array(global_map_in_FOV.points)[::10])
 
