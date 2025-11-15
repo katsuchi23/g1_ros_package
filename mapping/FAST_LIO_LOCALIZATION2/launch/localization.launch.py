@@ -4,6 +4,8 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
+import math
+import yaml
 
 import os
 
@@ -102,6 +104,48 @@ def generate_launch_description():
         condition=IfCondition(rviz_use),
     )
 
+    # Read the YAML config file to get odom orientation values
+    config_file_path = os.path.join(default_config_path, "mid360.yaml")
+    with open(config_file_path, 'r') as file:
+        yaml_config = yaml.safe_load(file)
+    
+    # Get odom orientation from YAML
+    odom_roll = yaml_config['/**']['ros__parameters']['publish']['odom_roll']
+    odom_pitch = yaml_config['/**']['ros__parameters']['publish']['odom_pitch']
+    odom_yaw = yaml_config['/**']['ros__parameters']['publish']['odom_yaw']
+    
+    # Static transform from body to base_link
+    # This flips the orientation back so base_link is aligned with odom/map frames
+    # Flip the signs: body->base_link is the inverse of odom->camera_init
+    roll = -odom_roll * math.pi / 180.0  # Negate and convert to radians
+    pitch = odom_pitch * math.pi / 180.0  # Negate and convert to radians
+    yaw = -odom_yaw * math.pi / 180.0    # Negate and convert to radians
+    
+    # Convert RPY to quaternion
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+    
+    qw = cr * cp * cy + sr * sp * sy
+    qx = sr * cp * cy - cr * sp * sy
+    qy = cr * sp * cy + sr * cp * sy
+    qz = cr * cp * sy - sr * sp * cy
+    
+    body_to_base_link_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='body_to_base_link_broadcaster',
+        arguments=[
+            '0', '0', '0',  # x, y, z translation
+            str(qx), str(qy), str(qz), str(qw),  # quaternion
+            'body',
+            'base_link'
+        ],
+        output='screen'
+    )
 
     ld = LaunchDescription()
     ld.add_action(declare_use_sim_time_cmd)
@@ -117,5 +161,6 @@ def generate_launch_description():
     ld.add_action(global_localization_node)
     ld.add_action(transform_fusion_node)
     ld.add_action(pcd_publisher_node)
+    ld.add_action(body_to_base_link_tf)
 
     return ld
