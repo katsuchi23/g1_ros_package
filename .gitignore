@@ -1,14 +1,7 @@
 .env
 venv
 
-# Ignore all PCD files in FAST_LIO
-mapping/FAST_LIO/PCD/*.pcd
-mapping/FAST_LIO/PCD/**/*.pcd
-
-# Ignore all PCD files in FAST_LIO_LOCALIZATION
-mapping/FAST_LIO_LOCALIZATION/PCD/*.pcd
-mapping/FAST_LIO_LOCALIZATION/PCD/**/*.pcd
-
-# Ignore PCD files anywhere in the workspace (optional)
+# Dataset / map files — not tracked in version control
 **/*.pcd
+**/*.pgm
 testing_bag/
