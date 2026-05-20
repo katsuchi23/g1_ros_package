@@ -1,0 +1,9 @@
+<class_libraries>
+  <library path="g1_navigation_axis_critics">
+    <class type="g1_navigation::TranslateOrRotateCritic" base_class_type="dwb_core::TrajectoryCritic">
+      <description>
+        Reject trajectories that contain both translational and rotational command components.
+      </description>
+    </class>
+  </library>
+</class_libraries>
